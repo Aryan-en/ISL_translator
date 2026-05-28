@@ -1,5 +1,6 @@
 import SwiftUI
 import AVFoundation
+import Combine
 
 @MainActor
 final class CameraViewModel: ObservableObject {
@@ -31,10 +32,19 @@ final class CameraViewModel: ObservableObject {
     // MARK: - Lifecycle
 
     func start() async {
-        await camera.requestPermission()
-        guard camera.permissionGranted else {
+        // Handle camera permission directly here (CameraService is a plain coordinator now)
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            break
+        case .notDetermined:
+            guard await AVCaptureDevice.requestAccess(for: .video) else {
+                permissionDenied = true
+                errorMessage = "Camera access was denied."
+                return
+            }
+        default:
             permissionDenied = true
-            errorMessage = camera.error ?? "Camera permission required."
+            errorMessage = "Camera access denied. Enable it in System Settings › Privacy & Security › Camera."
             return
         }
 

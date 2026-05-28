@@ -27,6 +27,7 @@ struct HandLandmarks: Sendable {
     let littleTip: CGPoint
     let chirality: String  // "Left" or "Right"
 
+    // nonisolated: called from background queues in HandTrackingService
     init?(from observation: VNHumanHandPoseObservation) {
         guard
             let w = try? observation.recognizedPoint(.wrist),
@@ -76,21 +77,19 @@ struct HandLandmarks: Sendable {
 
     // Skeleton connections for drawing
     static let connections: [(Int, Int)] = [
-        (0, 1), (1, 2), (2, 3), (3, 4),        // thumb
-        (0, 5), (5, 6), (6, 7), (7, 8),         // index
-        (0, 9), (9, 10), (10, 11), (11, 12),    // middle
-        (0, 13), (13, 14), (14, 15), (15, 16),  // ring
-        (0, 17), (17, 18), (18, 19), (19, 20),  // little
-        (5, 9), (9, 13), (13, 17)               // palm
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        (0, 9), (9, 10), (10, 11), (11, 12),
+        (0, 13), (13, 14), (14, 15), (15, 16),
+        (0, 17), (17, 18), (18, 19), (19, 20),
+        (5, 9), (9, 13), (13, 17)
     ]
 
-    // Approximate hand size (wrist to middle MCP distance)
-    var palmSize: CGFloat {
-        dist(wrist, middleMCP)
-    }
+    // Approximate hand size (wrist to middle MCP distance).
+    // Marked nonisolated so GestureClassifier can call it from a background queue.
+    var palmSize: CGFloat { dist(wrist, middleMCP) }
 
-    // Convert a Vision point (bottom-left origin) to top-left origin for display
-    // Also mirrors X for front-camera view
+    // Convert Vision point (bottom-left origin, 0-1) to view coordinates (top-left origin)
     func displayPoint(_ p: CGPoint, in size: CGSize, mirrored: Bool = true) -> CGPoint {
         let x = mirrored ? (1 - p.x) * size.width : p.x * size.width
         let y = (1 - p.y) * size.height
@@ -98,20 +97,20 @@ struct HandLandmarks: Sendable {
     }
 }
 
-// MARK: - Geometry helpers (Sendable free functions, nonisolated)
+// MARK: - Geometry helpers (free functions — no actor isolation)
 
-nonisolated func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
+func dist(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
     let dx = a.x - b.x
     let dy = a.y - b.y
     return sqrt(dx * dx + dy * dy)
 }
 
-nonisolated func angle(_ a: CGPoint, _ vertex: CGPoint, _ b: CGPoint) -> CGFloat {
+func angle(_ a: CGPoint, _ vertex: CGPoint, _ b: CGPoint) -> CGFloat {
     let v1 = CGPoint(x: a.x - vertex.x, y: a.y - vertex.y)
     let v2 = CGPoint(x: b.x - vertex.x, y: b.y - vertex.y)
     let dot = v1.x * v2.x + v1.y * v2.y
-    let mag1 = sqrt(v1.x * v1.x + v1.y * v1.y)
-    let mag2 = sqrt(v2.x * v2.x + v2.y * v2.y)
-    guard mag1 > 0, mag2 > 0 else { return 0 }
-    return acos(max(-1, min(1, dot / (mag1 * mag2))))
+    let m1  = sqrt(v1.x * v1.x + v1.y * v1.y)
+    let m2  = sqrt(v2.x * v2.x + v2.y * v2.y)
+    guard m1 > 0, m2 > 0 else { return 0 }
+    return acos(max(-1, min(1, dot / (m1 * m2))))
 }

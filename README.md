@@ -1,4 +1,4 @@
-# ISL Translator 🤟
+# ISL Translator 
 
 A real-time iOS application that translates **Indian Sign Language (ISL)** gestures into text and speech using computer vision and machine learning.
 

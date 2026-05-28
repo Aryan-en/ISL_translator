@@ -1,32 +1,29 @@
 import AVFoundation
-import Vision
 
 // MARK: - Camera Frame Coordinator
-// Bridges AVCaptureVideoDataOutputSampleBufferDelegate (background queue)
-// to the rest of the app.  Marked @unchecked Sendable because thread safety
-// is handled manually via NSLock / DispatchQueue.
+// Bridges AVCaptureVideoDataOutputSampleBufferDelegate (background queue) to the ViewModel.
+// @unchecked Sendable: thread safety is managed manually with NSLock.
 final class CameraFrameCoordinator: NSObject,
                                     AVCaptureVideoDataOutputSampleBufferDelegate,
                                     @unchecked Sendable {
 
-    // Written once at init, never mutated – safe to access nonisolated
-    nonisolated(unsafe) private let handTracker = HandTrackingService(maxHands: 1)
-    nonisolated(unsafe) private let classifier  = GestureClassifier()
+    // Immutable after init; HandTrackingService + GestureClassifier are value-type Sendable
+    private let handTracker = HandTrackingService(maxHands: 1)
+    private let classifier  = GestureClassifier()
 
-    // Prevents concurrent frame processing; cheaper than a DispatchQueue
-    nonisolated(unsafe) private var processing = false
+    // NSLock protects the processing flag across the camera output queue
     private let lock = NSLock()
+    private var processing = false
 
-    // Callback invoked on the MainActor with each processed frame's result
-    nonisolated(unsafe) var onFrame: ((GestureResult, [HandLandmarks]) -> Void)?
+    // Set from @MainActor (CameraViewModel); read on the camera output queue
+    var onFrame: ((GestureResult, [HandLandmarks]) -> Void)?
 
-    // AVCaptureVideoDataOutputSampleBufferDelegate – called on the camera output queue
-    nonisolated func captureOutput(
+    // Called on the camera output queue (background)
+    func captureOutput(
         _ output: AVCaptureOutput,
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        // Skip if still processing the previous frame
         lock.lock()
         guard !processing else { lock.unlock(); return }
         processing = true
@@ -38,49 +35,30 @@ final class CameraFrameCoordinator: NSObject,
             lock.unlock()
         }
 
-        // Vision runs synchronously here on the camera output queue (~5-15 ms)
+        // Vision runs synchronously here (~5-15 ms)
         let landmarks = handTracker.extractLandmarks(from: sampleBuffer)
         let result    = classifier.classify(landmarks: landmarks.first)
 
-        // Deliver results to the main actor
-        let r = result
-        let l = landmarks
-        Task { @MainActor [weak self] in
-            self?.onFrame?(r, l)
+        let cb = onFrame
+        DispatchQueue.main.async {
+            cb?(result, landmarks)
         }
     }
 }
 
 // MARK: - Camera Service
+// Plain class (no actor isolation) — used exclusively from @MainActor CameraViewModel.
+// AVCaptureSession setup and start/stop run on a dedicated background queue.
+final class CameraService: NSObject {
 
-@MainActor
-final class CameraService: ObservableObject {
-
-    @Published var permissionGranted = false
-    @Published var error: String?
-
-    private(set) var session = AVCaptureSession()
     let coordinator = CameraFrameCoordinator()
+    private(set) var session = AVCaptureSession()
 
     private let sessionQueue = DispatchQueue(label: "isl.camera.session", qos: .userInitiated)
     private let outputQueue  = DispatchQueue(label: "isl.camera.output",  qos: .userInitiated)
 
-    // MARK: Lifecycle
-
-    func requestPermission() async {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            permissionGranted = true
-        case .notDetermined:
-            permissionGranted = await AVCaptureDevice.requestAccess(for: .video)
-        default:
-            permissionGranted = false
-            error = "Camera access denied. Enable it in System Settings › Privacy & Security › Camera."
-        }
-    }
-
+    // Async configure: runs AVCaptureSession setup on sessionQueue, awaits completion
     func configure() async {
-        guard permissionGranted else { return }
         await withCheckedContinuation { cont in
             sessionQueue.async { [weak self] in
                 self?.setupSession()
@@ -91,27 +69,25 @@ final class CameraService: ObservableObject {
 
     func start() {
         sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if !self.session.isRunning { self.session.startRunning() }
+            guard let self, !self.session.isRunning else { return }
+            self.session.startRunning()
         }
     }
 
     func stop() {
         sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if self.session.isRunning { self.session.stopRunning() }
+            guard let self, self.session.isRunning else { return }
+            self.session.stopRunning()
         }
     }
 
-    // MARK: Private setup
+    // MARK: - Private setup (runs on sessionQueue)
 
     private func setupSession() {
         session.beginConfiguration()
         session.sessionPreset = .high
 
-        // Prefer built-in / front-facing camera
-        let device = frontCamera() ?? builtInCamera()
-        guard let device else {
+        guard let device = frontCamera() ?? builtInCamera() else {
             session.commitConfiguration()
             return
         }
@@ -125,18 +101,11 @@ final class CameraService: ObservableObject {
         }
 
         let output = AVCaptureVideoDataOutput()
-        output.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-        ]
+        output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         output.alwaysDiscardsLateVideoFrames = true
         output.setSampleBufferDelegate(coordinator, queue: outputQueue)
 
         if session.canAddOutput(output) { session.addOutput(output) }
-
-        // Mirror front-camera preview so it feels like a mirror
-        if let conn = output.connection(with: .video), conn.isVideoMirroringSupported {
-            conn.isVideoMirrored = false  // Vision coords stay consistent; we flip in UI
-        }
 
         session.commitConfiguration()
     }
@@ -150,10 +119,11 @@ final class CameraService: ObservableObject {
     }
 
     private func builtInCamera() -> AVCaptureDevice? {
+        // Fallback: any available camera (built-in or external) on macOS
         AVCaptureDevice.DiscoverySession(
-            deviceTypes: [.builtInWideAngleCamera, .externalUnknown],
+            deviceTypes: [.builtInWideAngleCamera],
             mediaType: .video,
             position: .unspecified
-        ).devices.first
+        ).devices.first ?? AVCaptureDevice.default(for: .video)
     }
 }

@@ -1,55 +1,47 @@
 import Vision
 import AVFoundation
-import CoreImage
 
-// HandTrackingService runs Vision hand-pose detection.
-// All methods are nonisolated so they can be called from background queues
-// without actor-isolation errors (SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor).
+// Runs VNDetectHumanHandPoseRequest synchronously on whichever queue calls it.
+// All methods are plain (no actor isolation) — safe to call from any background queue.
 struct HandTrackingService: Sendable {
 
-    // Maximum number of hands to detect simultaneously
     private let maxHands: Int
 
     init(maxHands: Int = 2) {
         self.maxHands = maxHands
     }
 
-    // Processes a CMSampleBuffer and returns up to maxHands HandLandmarks.
-    // Called synchronously on whichever queue the caller chooses.
-    nonisolated func extractLandmarks(from sampleBuffer: CMSampleBuffer) -> [HandLandmarks] {
-        let request = VNDetectHumanHandPoseRequest()
-        request.maximumHandCount = maxHands
-
-        // Use .upMirrored for front-facing camera to get natural coordinates
+    func extractLandmarks(from sampleBuffer: CMSampleBuffer) -> [HandLandmarks] {
+        let request = makeRequest()
         let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer,
                                             orientation: .up,
                                             options: [:])
-        do {
-            try handler.perform([request])
-        } catch {
-            return []
-        }
-
-        guard let results = request.results, !results.isEmpty else { return [] }
-
-        return results.compactMap { HandLandmarks(from: $0) }
+        return perform(request, with: handler)
     }
 
-    // Convenience: extract from CVPixelBuffer (useful when buffer has been retained)
-    nonisolated func extractLandmarks(from pixelBuffer: CVPixelBuffer) -> [HandLandmarks] {
-        let request = VNDetectHumanHandPoseRequest()
-        request.maximumHandCount = maxHands
-
+    func extractLandmarks(from pixelBuffer: CVPixelBuffer) -> [HandLandmarks] {
+        let request = makeRequest()
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer,
                                             orientation: .up,
                                             options: [:])
+        return perform(request, with: handler)
+    }
+
+    // MARK: - Private
+
+    private func makeRequest() -> VNDetectHumanHandPoseRequest {
+        let r = VNDetectHumanHandPoseRequest()
+        r.maximumHandCount = maxHands
+        return r
+    }
+
+    private func perform(_ request: VNDetectHumanHandPoseRequest,
+                         with handler: VNImageRequestHandler) -> [HandLandmarks] {
         do {
             try handler.perform([request])
         } catch {
             return []
         }
-
-        guard let results = request.results, !results.isEmpty else { return [] }
-        return results.compactMap { HandLandmarks(from: $0) }
+        return (request.results ?? []).compactMap { HandLandmarks(from: $0) }
     }
 }
