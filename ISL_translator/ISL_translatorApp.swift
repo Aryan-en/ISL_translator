@@ -1,32 +1,24 @@
-//
-//  ISL_translatorApp.swift
-//  ISL_translator
-//
-//  Created by Aryan Singh on 26/05/26.
-//
-
 import SwiftUI
-import SwiftData
 
 @main
 struct ISL_translatorApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("ISL Translator") {
             ContentView()
+                .frame(minWidth: 1050, idealWidth: 1280,
+                       minHeight: 680,  idealHeight: 800)
         }
-        .modelContainer(sharedModelContainer)
+        .windowStyle(.titleBar)
+        .windowResizability(.contentMinSize)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+            CommandMenu("Translation") {
+                Button("Clear Sentence") {}
+                    .keyboardShortcut("k", modifiers: [.command])
+                Button("Speak Sentence") {}
+                    .keyboardShortcut("s", modifiers: [.command, .shift])
+            }
+        }
     }
 }

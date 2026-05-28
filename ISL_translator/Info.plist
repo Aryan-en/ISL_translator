@@ -2,9 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>ISL Translator needs camera access to detect and translate Indian Sign Language gestures in real time.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Not required.</string>
 </dict>
 </plist>
